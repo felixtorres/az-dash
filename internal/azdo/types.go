@@ -1,0 +1,166 @@
+package azdo
+
+import (
+	"fmt"
+	"time"
+)
+
+// Profile represents the current user's Azure DevOps profile.
+type Profile struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	EmailAddress string `json:"emailAddress"`
+}
+
+// PullRequest represents an Azure DevOps pull request.
+type PullRequest struct {
+	PullRequestID int        `json:"pullRequestId"`
+	Title         string     `json:"title"`
+	Description   string     `json:"description"`
+	Status        string     `json:"status"` // active, completed, abandoned
+	CreatedBy     IdentityRef `json:"createdBy"`
+	CreationDate  time.Time  `json:"creationDate"`
+	ClosedDate    *time.Time `json:"closedDate"`
+	SourceRefName string     `json:"sourceRefName"`
+	TargetRefName string     `json:"targetRefName"`
+	MergeStatus   string     `json:"mergeStatus"`
+	IsDraft       bool       `json:"isDraft"`
+	Repository    GitRepository `json:"repository"`
+	Reviewers     []Reviewer `json:"reviewers"`
+	Labels        []Label    `json:"labels"`
+	URL           string     `json:"url"`
+}
+
+func (pr *PullRequest) WebURL() string {
+	if pr.Repository.WebURL != "" {
+		return pr.Repository.WebURL + "/pullrequest/" + fmt.Sprintf("%d", pr.PullRequestID)
+	}
+	return ""
+}
+
+type IdentityRef struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	UniqueName  string `json:"uniqueName"`
+}
+
+type Reviewer struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	UniqueName  string `json:"uniqueName"`
+	Vote        int    `json:"vote"` // 10=approved, 5=approved with suggestions, -5=waiting, -10=rejected, 0=no response
+	IsRequired  bool   `json:"isRequired"`
+}
+
+type Label struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type GitRepository struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	WebURL string `json:"webUrl"`
+}
+
+// WorkItem represents an Azure DevOps work item.
+type WorkItem struct {
+	ID     int                    `json:"id"`
+	Rev    int                    `json:"rev"`
+	Fields map[string]interface{} `json:"fields"`
+	URL    string                 `json:"url"`
+}
+
+func (wi *WorkItem) Field(name string) interface{} {
+	return wi.Fields[name]
+}
+
+func (wi *WorkItem) StringField(name string) string {
+	v, ok := wi.Fields[name]
+	if !ok {
+		return ""
+	}
+	switch val := v.(type) {
+	case string:
+		return val
+	case map[string]interface{}:
+		if dn, ok := val["displayName"].(string); ok {
+			return dn
+		}
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+// Build represents an Azure DevOps build (pipeline run).
+type Build struct {
+	ID            int         `json:"id"`
+	BuildNumber   string      `json:"buildNumber"`
+	Status        string      `json:"status"` // notStarted, inProgress, completed, cancelling
+	Result        string      `json:"result"` // succeeded, failed, canceled, partiallySucceeded
+	QueueTime     time.Time   `json:"queueTime"`
+	StartTime     *time.Time  `json:"startTime"`
+	FinishTime    *time.Time  `json:"finishTime"`
+	SourceBranch  string      `json:"sourceBranch"`
+	SourceVersion string      `json:"sourceVersion"`
+	RequestedFor  IdentityRef `json:"requestedFor"`
+	Definition    BuildDefinition `json:"definition"`
+	Project       TeamProject `json:"project"`
+	URL           string      `json:"url"`
+}
+
+func (b *Build) WebURL() string {
+	if b.Project.Name != "" && b.Definition.ID > 0 {
+		return fmt.Sprintf("https://dev.azure.com/%s/_build/results?buildId=%d", b.Project.Name, b.ID)
+	}
+	return ""
+}
+
+func (b *Build) Duration() time.Duration {
+	if b.StartTime == nil || b.FinishTime == nil {
+		return 0
+	}
+	return b.FinishTime.Sub(*b.StartTime)
+}
+
+type BuildDefinition struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+type TeamProject struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// Timeline represents build stages/jobs.
+type Timeline struct {
+	Records []TimelineRecord `json:"records"`
+}
+
+type TimelineRecord struct {
+	ID         string     `json:"id"`
+	ParentID   string     `json:"parentId"`
+	Name       string     `json:"name"`
+	Type       string     `json:"type"` // Stage, Job, Task
+	State      string     `json:"state"`
+	Result     string     `json:"result"`
+	StartTime  *time.Time `json:"startTime"`
+	FinishTime *time.Time `json:"finishTime"`
+	Order      int        `json:"order"`
+}
+
+// WIQL response.
+type WIQLResult struct {
+	WorkItems []WIQLWorkItemRef `json:"workItems"`
+}
+
+type WIQLWorkItemRef struct {
+	ID  int    `json:"id"`
+	URL string `json:"url"`
+}
+
+// Generic list response wrapper.
+type ListResponse[T any] struct {
+	Count int `json:"count"`
+	Value []T `json:"value"`
+}

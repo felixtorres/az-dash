@@ -1,0 +1,4 @@
+az-dash
+dist/
+.env
+*.exe
