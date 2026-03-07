@@ -4,6 +4,7 @@ package views
 type View interface {
 	NextSection()
 	PrevSection()
+	ActiveSectionIndex() int
 	CursorUp()
 	CursorDown()
 	CursorFirst()

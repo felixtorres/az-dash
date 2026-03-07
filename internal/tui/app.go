@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -14,6 +15,7 @@ import (
 	"github.com/felixtorres/az-dash/internal/tui/keys"
 	"github.com/felixtorres/az-dash/internal/tui/theme"
 	"github.com/felixtorres/az-dash/internal/tui/views"
+	"github.com/felixtorres/az-dash/internal/utils"
 )
 
 type ViewType int
@@ -24,18 +26,39 @@ const (
 	ViewPipelines
 )
 
+// Messages — all state changes flow through these.
 type bootstrapDoneMsg struct{ err error }
-type fetchDoneMsg struct {
-	view ViewType
+
+type prsFetchedMsg struct {
 	section int
-	err  error
+	data    []azdo.PullRequest
+	err     error
 }
 
+type workItemsFetchedMsg struct {
+	section int
+	data    []azdo.WorkItem
+	err     error
+}
+
+type buildsFetchedMsg struct {
+	section int
+	data    []azdo.Build
+	err     error
+}
+
+type actionResultMsg struct {
+	msg string
+	err error
+}
+
+type refreshTickMsg struct{}
+
 type Model struct {
-	cfg       *config.Config
-	client    *azdo.Client
-	theme     *theme.Theme
-	spinner   spinner.Model
+	cfg        *config.Config
+	client     *azdo.Client
+	theme      *theme.Theme
+	spinner    spinner.Model
 	activeView ViewType
 	prView     *views.PRView
 	wiView     *views.WorkItemView
@@ -93,6 +116,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
 		m.bootstrap,
+		m.scheduleRefresh(),
 	)
 }
 
@@ -120,12 +144,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.ready = true
-		cmds = append(cmds, m.fetchActiveView())
+		cmds = append(cmds, m.fetchAllSections()...)
 
-	case fetchDoneMsg:
+	case prsFetchedMsg:
 		if msg.err != nil {
-			m.statusMsg = fmt.Sprintf("Error: %v", msg.err)
+			m.prView.SetSectionError(msg.section, msg.err)
+		} else {
+			m.prView.SetSectionData(msg.section, msg.data)
 		}
+
+	case workItemsFetchedMsg:
+		if msg.err != nil {
+			m.wiView.SetSectionError(msg.section, msg.err)
+		} else {
+			m.wiView.SetSectionData(msg.section, msg.data)
+		}
+
+	case buildsFetchedMsg:
+		if msg.err != nil {
+			m.pipeView.SetSectionError(msg.section, msg.err)
+		} else {
+			m.pipeView.SetSectionData(msg.section, msg.data)
+		}
+
+	case actionResultMsg:
+		if msg.err != nil {
+			m.statusMsg = m.theme.Error.Render(fmt.Sprintf("Error: %v", msg.err))
+		} else {
+			m.statusMsg = msg.msg
+		}
+		// Re-fetch after actions to reflect changes
+		if msg.err == nil && msg.msg != "" && msg.msg != "Opened in browser" && msg.msg != "Diff closed" {
+			cmds = append(cmds, m.fetchCurrentSection())
+		}
+
+	case refreshTickMsg:
+		if m.ready {
+			cmds = append(cmds, m.fetchAllSections()...)
+		}
+		cmds = append(cmds, m.scheduleRefresh())
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -140,41 +197,253 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		switch {
-		case key.Matches(msg, keys.Global.Quit):
-			return m, tea.Quit
-		case key.Matches(msg, keys.Global.ViewPRs):
-			m.activeView = ViewPRs
-			cmds = append(cmds, m.fetchActiveView())
-		case key.Matches(msg, keys.Global.ViewWorkItems):
-			m.activeView = ViewWorkItems
-			cmds = append(cmds, m.fetchActiveView())
-		case key.Matches(msg, keys.Global.ViewPipelines):
-			m.activeView = ViewPipelines
-			cmds = append(cmds, m.fetchActiveView())
-		case key.Matches(msg, keys.Global.Refresh):
-			cmds = append(cmds, m.fetchActiveSection())
-		case key.Matches(msg, keys.Global.RefreshAll):
-			cmds = append(cmds, m.fetchActiveView())
-		case key.Matches(msg, keys.Global.NextSection):
-			m.activeViewPtr().NextSection()
-		case key.Matches(msg, keys.Global.PrevSection):
-			m.activeViewPtr().PrevSection()
-		case key.Matches(msg, keys.Global.Up):
-			m.activeViewPtr().CursorUp()
-		case key.Matches(msg, keys.Global.Down):
-			m.activeViewPtr().CursorDown()
-		case key.Matches(msg, keys.Global.FirstLine):
-			m.activeViewPtr().CursorFirst()
-		case key.Matches(msg, keys.Global.LastLine):
-			m.activeViewPtr().CursorLast()
-		case key.Matches(msg, keys.Global.TogglePreview):
-			m.activeViewPtr().TogglePreview()
+		cmd := m.handleKeypress(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 	}
 
 	return m, tea.Batch(cmds...)
 }
+
+func (m *Model) handleKeypress(msg tea.KeyMsg) tea.Cmd {
+	// Global keys
+	switch {
+	case key.Matches(msg, keys.Global.Quit):
+		return tea.Quit
+	case key.Matches(msg, keys.Global.ViewPRs):
+		m.activeView = ViewPRs
+		return nil
+	case key.Matches(msg, keys.Global.ViewWorkItems):
+		m.activeView = ViewWorkItems
+		return nil
+	case key.Matches(msg, keys.Global.ViewPipelines):
+		m.activeView = ViewPipelines
+		return nil
+	case key.Matches(msg, keys.Global.Refresh):
+		return m.fetchCurrentSection()
+	case key.Matches(msg, keys.Global.RefreshAll):
+		return tea.Batch(m.fetchAllSections()...)
+	case key.Matches(msg, keys.Global.NextSection):
+		m.activeViewPtr().NextSection()
+		return nil
+	case key.Matches(msg, keys.Global.PrevSection):
+		m.activeViewPtr().PrevSection()
+		return nil
+	case key.Matches(msg, keys.Global.Up):
+		m.activeViewPtr().CursorUp()
+		return nil
+	case key.Matches(msg, keys.Global.Down):
+		m.activeViewPtr().CursorDown()
+		return nil
+	case key.Matches(msg, keys.Global.FirstLine):
+		m.activeViewPtr().CursorFirst()
+		return nil
+	case key.Matches(msg, keys.Global.LastLine):
+		m.activeViewPtr().CursorLast()
+		return nil
+	case key.Matches(msg, keys.Global.TogglePreview):
+		m.activeViewPtr().TogglePreview()
+		return nil
+	case key.Matches(msg, keys.Global.OpenBrowser):
+		return m.openInBrowser()
+	case key.Matches(msg, keys.Global.CopyURL):
+		return m.copyURL()
+	case key.Matches(msg, keys.Global.CopyID):
+		return m.copyID()
+	}
+
+	// View-specific keys
+	switch m.activeView {
+	case ViewPRs:
+		return m.handlePRKey(msg)
+	case ViewWorkItems:
+		return m.handleWorkItemKey(msg)
+	case ViewPipelines:
+		return m.handlePipelineKey(msg)
+	}
+
+	return nil
+}
+
+func (m *Model) handlePRKey(msg tea.KeyMsg) tea.Cmd {
+	pr := m.prView.SelectedPR()
+	if pr == nil {
+		return nil
+	}
+
+	switch {
+	case key.Matches(msg, keys.PR.Approve):
+		return m.approvePR(pr)
+	case key.Matches(msg, keys.PR.Complete):
+		return m.completePR(pr)
+	case key.Matches(msg, keys.PR.Abandon):
+		return m.abandonPR(pr)
+	case key.Matches(msg, keys.PR.Reopen):
+		return m.reopenPR(pr)
+	case key.Matches(msg, keys.PR.Diff):
+		return m.viewDiff(pr)
+	}
+
+	return nil
+}
+
+func (m *Model) handleWorkItemKey(msg tea.KeyMsg) tea.Cmd {
+	return nil
+}
+
+func (m *Model) handlePipelineKey(msg tea.KeyMsg) tea.Cmd {
+	return nil
+}
+
+// --- Actions ---
+
+func (m *Model) openInBrowser() tea.Cmd {
+	url := m.selectedURL()
+	if url == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		err := utils.OpenBrowser(url)
+		if err != nil {
+			return actionResultMsg{err: fmt.Errorf("open browser: %w", err)}
+		}
+		return actionResultMsg{msg: "Opened in browser"}
+	}
+}
+
+func (m *Model) copyURL() tea.Cmd {
+	url := m.selectedURL()
+	if url == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		if err := utils.CopyToClipboard(url); err != nil {
+			return actionResultMsg{err: fmt.Errorf("copy: %w", err)}
+		}
+		return actionResultMsg{msg: "URL copied"}
+	}
+}
+
+func (m *Model) copyID() tea.Cmd {
+	var id string
+	switch m.activeView {
+	case ViewPRs:
+		if pr := m.prView.SelectedPR(); pr != nil {
+			id = fmt.Sprintf("%d", pr.PullRequestID)
+		}
+	case ViewWorkItems:
+		if wi := m.wiView.SelectedWorkItem(); wi != nil {
+			id = fmt.Sprintf("%d", wi.ID)
+		}
+	case ViewPipelines:
+		if b := m.pipeView.SelectedBuild(); b != nil {
+			id = fmt.Sprintf("%d", b.ID)
+		}
+	}
+	if id == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		if err := utils.CopyToClipboard(id); err != nil {
+			return actionResultMsg{err: fmt.Errorf("copy: %w", err)}
+		}
+		return actionResultMsg{msg: fmt.Sprintf("Copied #%s", id)}
+	}
+}
+
+func (m *Model) approvePR(pr *azdo.PullRequest) tea.Cmd {
+	client := m.client
+	userID := client.UserID()
+	repoID := pr.Repository.ID
+	prID := pr.PullRequestID
+
+	return func() tea.Msg {
+		err := client.VotePullRequest("", "", repoID, prID, userID, 10)
+		if err != nil {
+			return actionResultMsg{err: fmt.Errorf("approve PR #%d: %w", prID, err)}
+		}
+		return actionResultMsg{msg: fmt.Sprintf("Approved PR #%d", prID)}
+	}
+}
+
+func (m *Model) completePR(pr *azdo.PullRequest) tea.Cmd {
+	client := m.client
+	repoID := pr.Repository.ID
+	prID := pr.PullRequestID
+
+	return func() tea.Msg {
+		err := client.UpdatePullRequestStatus("", "", repoID, prID, "completed")
+		if err != nil {
+			return actionResultMsg{err: fmt.Errorf("complete PR #%d: %w", prID, err)}
+		}
+		return actionResultMsg{msg: fmt.Sprintf("Completed PR #%d", prID)}
+	}
+}
+
+func (m *Model) abandonPR(pr *azdo.PullRequest) tea.Cmd {
+	client := m.client
+	repoID := pr.Repository.ID
+	prID := pr.PullRequestID
+
+	return func() tea.Msg {
+		err := client.UpdatePullRequestStatus("", "", repoID, prID, "abandoned")
+		if err != nil {
+			return actionResultMsg{err: fmt.Errorf("abandon PR #%d: %w", prID, err)}
+		}
+		return actionResultMsg{msg: fmt.Sprintf("Abandoned PR #%d", prID)}
+	}
+}
+
+func (m *Model) reopenPR(pr *azdo.PullRequest) tea.Cmd {
+	client := m.client
+	repoID := pr.Repository.ID
+	prID := pr.PullRequestID
+
+	return func() tea.Msg {
+		err := client.UpdatePullRequestStatus("", "", repoID, prID, "active")
+		if err != nil {
+			return actionResultMsg{err: fmt.Errorf("reactivate PR #%d: %w", prID, err)}
+		}
+		return actionResultMsg{msg: fmt.Sprintf("Reactivated PR #%d", prID)}
+	}
+}
+
+func (m *Model) viewDiff(pr *azdo.PullRequest) tea.Cmd {
+	client := m.client
+	repoID := pr.Repository.ID
+	prID := pr.PullRequestID
+
+	return tea.ExecProcess(
+		utils.DiffCommand(client, repoID, prID),
+		func(err error) tea.Msg {
+			if err != nil {
+				return actionResultMsg{err: fmt.Errorf("diff: %w", err)}
+			}
+			return actionResultMsg{msg: "Diff closed"}
+		},
+	)
+}
+
+func (m *Model) selectedURL() string {
+	switch m.activeView {
+	case ViewPRs:
+		if pr := m.prView.SelectedPR(); pr != nil {
+			return pr.WebURL()
+		}
+	case ViewWorkItems:
+		if wi := m.wiView.SelectedWorkItem(); wi != nil {
+			return wi.WebURL()
+		}
+	case ViewPipelines:
+		if b := m.pipeView.SelectedBuild(); b != nil {
+			return b.WebURL()
+		}
+	}
+	return ""
+}
+
+// --- View rendering ---
 
 func (m Model) View() string {
 	if m.bootErr != nil {
@@ -185,12 +454,9 @@ func (m Model) View() string {
 	}
 
 	var b strings.Builder
-
-	// Tab bar
 	b.WriteString(m.renderTabs())
 	b.WriteString("\n")
 
-	// Active view
 	switch m.activeView {
 	case ViewPRs:
 		b.WriteString(m.prView.View())
@@ -200,7 +466,6 @@ func (m Model) View() string {
 		b.WriteString(m.pipeView.View())
 	}
 
-	// Status bar
 	b.WriteString("\n")
 	b.WriteString(m.renderStatusBar())
 
@@ -210,19 +475,21 @@ func (m Model) View() string {
 func (m *Model) renderTabs() string {
 	tabs := []struct {
 		name string
+		key  string
 		view ViewType
 	}{
-		{"Pull Requests", ViewPRs},
-		{"Work Items", ViewWorkItems},
-		{"Pipelines", ViewPipelines},
+		{"Pull Requests", "1", ViewPRs},
+		{"Work Items", "2", ViewWorkItems},
+		{"Pipelines", "3", ViewPipelines},
 	}
 
 	var rendered []string
 	for _, t := range tabs {
+		label := fmt.Sprintf("[%s] %s", t.key, t.name)
 		if t.view == m.activeView {
-			rendered = append(rendered, m.theme.ActiveTab.Render(t.name))
+			rendered = append(rendered, m.theme.ActiveTab.Render(label))
 		} else {
-			rendered = append(rendered, m.theme.InactiveTab.Render(t.name))
+			rendered = append(rendered, m.theme.InactiveTab.Render(label))
 		}
 	}
 
@@ -231,14 +498,20 @@ func (m *Model) renderTabs() string {
 
 func (m *Model) renderStatusBar() string {
 	left := m.theme.StatusBar.Render(fmt.Sprintf(" %s/%s", m.cfg.Organization, m.cfg.Project))
+
+	middle := ""
+	if m.statusMsg != "" {
+		middle = "  " + m.statusMsg
+	}
+
 	right := m.theme.StatusBar.Render("? help  q quit ")
 
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(middle) - lipgloss.Width(right)
 	if gap < 0 {
 		gap = 0
 	}
 
-	return left + strings.Repeat(" ", gap) + right
+	return left + middle + strings.Repeat(" ", gap) + right
 }
 
 func (m *Model) renderLoading(msg string) string {
@@ -250,13 +523,8 @@ func (m *Model) renderError(err error) string {
 		m.theme.Error.Render(fmt.Sprintf("Error: %v", err)))
 }
 
-func (m *Model) contentWidth() int {
-	return m.width
-}
-
-func (m *Model) contentHeight() int {
-	return m.height - 3 // tabs + status bar + spacing
-}
+func (m *Model) contentWidth() int  { return m.width }
+func (m *Model) contentHeight() int { return m.height - 3 }
 
 func (m *Model) activeViewPtr() views.View {
 	switch m.activeView {
@@ -269,84 +537,87 @@ func (m *Model) activeViewPtr() views.View {
 	}
 }
 
-func (m *Model) fetchActiveView() tea.Cmd {
+// --- Data fetching (returns messages, never mutates state) ---
+
+func (m *Model) fetchAllSections() []tea.Cmd {
+	var cmds []tea.Cmd
+
+	for i, section := range m.cfg.PRSections {
+		cmds = append(cmds, m.fetchPRSection(i, section))
+	}
+	for i, section := range m.cfg.WorkItemSections {
+		cmds = append(cmds, m.fetchWISection(i, section))
+	}
+	for i, section := range m.cfg.PipelineSections {
+		cmds = append(cmds, m.fetchBuildSection(i, section))
+	}
+
+	return cmds
+}
+
+func (m *Model) fetchCurrentSection() tea.Cmd {
 	switch m.activeView {
 	case ViewPRs:
-		return m.fetchPRs()
+		idx := m.prView.ActiveSectionIndex()
+		if idx < len(m.cfg.PRSections) {
+			return m.fetchPRSection(idx, m.cfg.PRSections[idx])
+		}
 	case ViewWorkItems:
-		return m.fetchWorkItems()
+		idx := m.wiView.ActiveSectionIndex()
+		if idx < len(m.cfg.WorkItemSections) {
+			return m.fetchWISection(idx, m.cfg.WorkItemSections[idx])
+		}
 	case ViewPipelines:
-		return m.fetchBuilds()
+		idx := m.pipeView.ActiveSectionIndex()
+		if idx < len(m.cfg.PipelineSections) {
+			return m.fetchBuildSection(idx, m.cfg.PipelineSections[idx])
+		}
 	}
 	return nil
 }
 
-func (m *Model) fetchActiveSection() tea.Cmd {
-	return m.fetchActiveView()
-}
-
-func (m *Model) fetchPRs() tea.Cmd {
+func (m *Model) fetchPRSection(i int, section config.PRSection) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
-		for i, section := range m.cfg.PRSections {
-			criteria := azdo.PRSearchCriteria{
-				Status:     section.Filters.Status,
-				CreatorID:  section.Filters.CreatorID,
-				ReviewerID: section.Filters.ReviewerID,
-				Repository: section.Filters.Repository,
-				TargetRef:  section.Filters.TargetBranch,
-				SourceRef:  section.Filters.SourceRefName,
-			}
-			org := section.Organization
-			project := section.Project
-
-			prs, err := m.client.ListPullRequests(org, project, criteria, section.Limit)
-			if err != nil {
-				m.prView.SetSectionError(i, err)
-			} else {
-				m.prView.SetSectionData(i, prs)
-			}
+		criteria := azdo.PRSearchCriteria{
+			Status:     section.Filters.Status,
+			CreatorID:  section.Filters.CreatorID,
+			ReviewerID: section.Filters.ReviewerID,
+			Repository: section.Filters.Repository,
+			TargetRef:  section.Filters.TargetBranch,
+			SourceRef:  section.Filters.SourceRefName,
 		}
-		return fetchDoneMsg{view: ViewPRs}
+		prs, err := client.ListPullRequests(section.Organization, section.Project, criteria, section.Limit)
+		return prsFetchedMsg{section: i, data: prs, err: err}
 	}
 }
 
-func (m *Model) fetchWorkItems() tea.Cmd {
+func (m *Model) fetchWISection(i int, section config.WorkItemSection) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
-		for i, section := range m.cfg.WorkItemSections {
-			org := section.Organization
-			project := section.Project
-
-			items, err := m.client.QueryWorkItems(org, project, section.WIQL, section.Limit)
-			if err != nil {
-				m.wiView.SetSectionError(i, err)
-			} else {
-				m.wiView.SetSectionData(i, items)
-			}
-		}
-		return fetchDoneMsg{view: ViewWorkItems}
+		items, err := client.QueryWorkItems(section.Organization, section.Project, section.WIQL, section.Limit)
+		return workItemsFetchedMsg{section: i, data: items, err: err}
 	}
 }
 
-func (m *Model) fetchBuilds() tea.Cmd {
-	return func() tea.Msg {
-		for i, section := range m.cfg.PipelineSections {
-			criteria := azdo.BuildSearchCriteria{
-				DefinitionID: section.Filters.DefinitionID,
-				RequestedFor: section.Filters.RequestedFor,
-				StatusFilter: section.Filters.StatusFilter,
-				ResultFilter: section.Filters.ResultFilter,
-				BranchName:   section.Filters.BranchName,
-			}
-			org := section.Organization
-			project := section.Project
+func (m *Model) scheduleRefresh() tea.Cmd {
+	interval := time.Duration(m.cfg.Defaults.RefetchIntervalMinutes) * time.Minute
+	return tea.Tick(interval, func(time.Time) tea.Msg {
+		return refreshTickMsg{}
+	})
+}
 
-			builds, err := m.client.ListBuilds(org, project, criteria, section.Limit)
-			if err != nil {
-				m.pipeView.SetSectionError(i, err)
-			} else {
-				m.pipeView.SetSectionData(i, builds)
-			}
+func (m *Model) fetchBuildSection(i int, section config.PipelineSection) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		criteria := azdo.BuildSearchCriteria{
+			DefinitionID: section.Filters.DefinitionID,
+			RequestedFor: section.Filters.RequestedFor,
+			StatusFilter: section.Filters.StatusFilter,
+			ResultFilter: section.Filters.ResultFilter,
+			BranchName:   section.Filters.BranchName,
 		}
-		return fetchDoneMsg{view: ViewPipelines}
+		builds, err := client.ListBuilds(section.Organization, section.Project, criteria, section.Limit)
+		return buildsFetchedMsg{section: i, data: builds, err: err}
 	}
 }

@@ -124,6 +124,30 @@ func (c *Client) post(apiURL string, body interface{}, result interface{}) error
 	return c.doWithAuth(req, result)
 }
 
+func (c *Client) put(apiURL string, body interface{}, result interface{}) error {
+	return c.mutate("PUT", apiURL, body, result)
+}
+
+func (c *Client) patch(apiURL string, body interface{}, result interface{}) error {
+	return c.mutate("PATCH", apiURL, body, result)
+}
+
+func (c *Client) mutate(method, apiURL string, body interface{}, result interface{}) error {
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshaling request body: %w", err)
+	}
+
+	fullURL := apiURL + "?api-version=" + apiVersion
+	req, err := http.NewRequest(method, fullURL, strings.NewReader(string(jsonBody)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	return c.doWithAuth(req, result)
+}
+
 func (c *Client) doWithAuth(req *http.Request, result interface{}) error {
 	headerName, headerValue, err := c.auth.AuthHeader()
 	if err != nil {

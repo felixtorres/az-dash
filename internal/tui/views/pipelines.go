@@ -83,6 +83,7 @@ func (v *PipelineView) CursorDown() {
 	}
 }
 
+func (v *PipelineView) ActiveSectionIndex() int { return v.activeSection }
 func (v *PipelineView) CursorFirst() { v.cursor = 0 }
 
 func (v *PipelineView) CursorLast() {

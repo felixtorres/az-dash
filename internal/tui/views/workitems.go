@@ -83,6 +83,7 @@ func (v *WorkItemView) CursorDown() {
 	}
 }
 
+func (v *WorkItemView) ActiveSectionIndex() int { return v.activeSection }
 func (v *WorkItemView) CursorFirst() { v.cursor = 0 }
 
 func (v *WorkItemView) CursorLast() {

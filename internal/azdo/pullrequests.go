@@ -3,6 +3,7 @@ package azdo
 import (
 	"fmt"
 	"net/url"
+	"strings"
 )
 
 type PRSearchCriteria struct {
@@ -60,4 +61,77 @@ func (c *Client) GetPullRequest(org, project, repoID string, prID int) (*PullReq
 		return nil, err
 	}
 	return &pr, nil
+}
+
+// VotePullRequest sets a reviewer's vote on a PR.
+// vote: 10=approve, 5=approve with suggestions, -5=wait, -10=reject, 0=reset
+func (c *Client) VotePullRequest(org, project, repoID string, prID int, reviewerID string, vote int) error {
+	apiURL := fmt.Sprintf("%s/git/repositories/%s/pullrequests/%d/reviewers/%s",
+		c.projectURL(org, project), repoID, prID, reviewerID)
+
+	body := map[string]interface{}{
+		"vote": vote,
+	}
+	return c.put(apiURL, body, nil)
+}
+
+// UpdatePullRequestStatus changes a PR's status (active, completed, abandoned).
+func (c *Client) UpdatePullRequestStatus(org, project, repoID string, prID int, status string) error {
+	apiURL := fmt.Sprintf("%s/git/repositories/%s/pullrequests/%d",
+		c.projectURL(org, project), repoID, prID)
+
+	body := map[string]interface{}{
+		"status": status,
+	}
+	return c.patch(apiURL, body, nil)
+}
+
+// GetPullRequestIterations fetches iterations (push events) for a PR.
+func (c *Client) GetPullRequestIterations(org, project, repoID string, prID int) ([]PRIteration, error) {
+	apiURL := fmt.Sprintf("%s/git/repositories/%s/pullrequests/%d/iterations",
+		c.projectURL(org, project), repoID, prID)
+
+	var resp ListResponse[PRIteration]
+	if err := c.get(apiURL, nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Value, nil
+}
+
+// GetPullRequestChanges fetches the file changes for a specific iteration.
+func (c *Client) GetPullRequestChanges(org, project, repoID string, prID, iterationID int) (*PRChanges, error) {
+	apiURL := fmt.Sprintf("%s/git/repositories/%s/pullrequests/%d/iterations/%d/changes",
+		c.projectURL(org, project), repoID, prID, iterationID)
+
+	var changes PRChanges
+	if err := c.get(apiURL, nil, &changes); err != nil {
+		return nil, err
+	}
+	return &changes, nil
+}
+
+// GetPullRequestDiff fetches the diff content between iterations for generating unified diffs.
+func (c *Client) GetPullRequestDiff(org, project, repoID string, prID int) (string, error) {
+	iterations, err := c.GetPullRequestIterations(org, project, repoID, prID)
+	if err != nil {
+		return "", err
+	}
+	if len(iterations) == 0 {
+		return "", fmt.Errorf("no iterations found for PR #%d", prID)
+	}
+
+	lastIter := iterations[len(iterations)-1]
+	changes, err := c.GetPullRequestChanges(org, project, repoID, prID, lastIter.ID)
+	if err != nil {
+		return "", err
+	}
+
+	var sb strings.Builder
+	for _, entry := range changes.ChangeEntries {
+		changeType := entry.ChangeType
+		path := entry.Item.Path
+		sb.WriteString(fmt.Sprintf("--- a%s\n+++ b%s\n", path, path))
+		sb.WriteString(fmt.Sprintf("@@ %s @@\n", changeType))
+	}
+	return sb.String(), nil
 }

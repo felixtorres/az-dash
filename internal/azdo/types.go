@@ -91,6 +91,34 @@ func (wi *WorkItem) StringField(name string) string {
 	return fmt.Sprintf("%v", v)
 }
 
+func (wi *WorkItem) WebURL() string {
+	// Work items don't have a direct webUrl in the response; construct from org info.
+	// The `url` field points to the API URL, which we can't easily convert.
+	// Callers should construct the URL using org/project context.
+	return wi.URL
+}
+
+// PRIteration represents a push event on a pull request.
+type PRIteration struct {
+	ID          int        `json:"id"`
+	Description string     `json:"description"`
+	CreatedDate time.Time  `json:"createdDate"`
+}
+
+// PRChanges represents the file changes in a PR iteration.
+type PRChanges struct {
+	ChangeEntries []PRChangeEntry `json:"changeEntries"`
+}
+
+type PRChangeEntry struct {
+	ChangeType string       `json:"changeType"` // add, edit, delete, rename
+	Item       PRChangeItem `json:"item"`
+}
+
+type PRChangeItem struct {
+	Path string `json:"path"`
+}
+
 // Build represents an Azure DevOps build (pipeline run).
 type Build struct {
 	ID            int         `json:"id"`

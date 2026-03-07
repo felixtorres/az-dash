@@ -83,6 +83,7 @@ func (v *PRView) CursorDown() {
 	}
 }
 
+func (v *PRView) ActiveSectionIndex() int { return v.activeSection }
 func (v *PRView) CursorFirst() { v.cursor = 0 }
 
 func (v *PRView) CursorLast() {
