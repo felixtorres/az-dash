@@ -7,28 +7,28 @@ import (
 
 // Profile represents the current user's Azure DevOps profile.
 type Profile struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"displayName"`
+	ID           string `json:"id"`
+	DisplayName  string `json:"displayName"`
 	EmailAddress string `json:"emailAddress"`
 }
 
 // PullRequest represents an Azure DevOps pull request.
 type PullRequest struct {
-	PullRequestID int        `json:"pullRequestId"`
-	Title         string     `json:"title"`
-	Description   string     `json:"description"`
-	Status        string     `json:"status"` // active, completed, abandoned
-	CreatedBy     IdentityRef `json:"createdBy"`
-	CreationDate  time.Time  `json:"creationDate"`
-	ClosedDate    *time.Time `json:"closedDate"`
-	SourceRefName string     `json:"sourceRefName"`
-	TargetRefName string     `json:"targetRefName"`
-	MergeStatus   string     `json:"mergeStatus"`
-	IsDraft       bool       `json:"isDraft"`
+	PullRequestID int           `json:"pullRequestId"`
+	Title         string        `json:"title"`
+	Description   string        `json:"description"`
+	Status        string        `json:"status"` // active, completed, abandoned
+	CreatedBy     IdentityRef   `json:"createdBy"`
+	CreationDate  time.Time     `json:"creationDate"`
+	ClosedDate    *time.Time    `json:"closedDate"`
+	SourceRefName string        `json:"sourceRefName"`
+	TargetRefName string        `json:"targetRefName"`
+	MergeStatus   string        `json:"mergeStatus"`
+	IsDraft       bool          `json:"isDraft"`
 	Repository    GitRepository `json:"repository"`
-	Reviewers     []Reviewer `json:"reviewers"`
-	Labels        []Label    `json:"labels"`
-	URL           string     `json:"url"`
+	Reviewers     []Reviewer    `json:"reviewers"`
+	Labels        []Label       `json:"labels"`
+	URL           string        `json:"url"`
 }
 
 func (pr *PullRequest) WebURL() string {
@@ -100,9 +100,9 @@ func (wi *WorkItem) WebURL() string {
 
 // PRIteration represents a push event on a pull request.
 type PRIteration struct {
-	ID          int        `json:"id"`
-	Description string     `json:"description"`
-	CreatedDate time.Time  `json:"createdDate"`
+	ID          int       `json:"id"`
+	Description string    `json:"description"`
+	CreatedDate time.Time `json:"createdDate"`
 }
 
 // PRChanges represents the file changes in a PR iteration.
@@ -111,29 +111,38 @@ type PRChanges struct {
 }
 
 type PRChangeEntry struct {
-	ChangeType string       `json:"changeType"` // add, edit, delete, rename
-	Item       PRChangeItem `json:"item"`
+	ChangeType   string       `json:"changeType"` // add, edit, delete, rename
+	Item         PRChangeItem `json:"item"`
+	OriginalPath string       `json:"originalPath"`
+	NewContent   *ItemContent `json:"newContent"`
 }
 
 type PRChangeItem struct {
-	Path string `json:"path"`
+	Path             string `json:"path"`
+	ObjectID         string `json:"objectId"`
+	OriginalObjectID string `json:"originalObjectId"`
+}
+
+type ItemContent struct {
+	Content     string `json:"content"`
+	ContentType string `json:"contentType"`
 }
 
 // Build represents an Azure DevOps build (pipeline run).
 type Build struct {
-	ID            int         `json:"id"`
-	BuildNumber   string      `json:"buildNumber"`
-	Status        string      `json:"status"` // notStarted, inProgress, completed, cancelling
-	Result        string      `json:"result"` // succeeded, failed, canceled, partiallySucceeded
-	QueueTime     time.Time   `json:"queueTime"`
-	StartTime     *time.Time  `json:"startTime"`
-	FinishTime    *time.Time  `json:"finishTime"`
-	SourceBranch  string      `json:"sourceBranch"`
-	SourceVersion string      `json:"sourceVersion"`
-	RequestedFor  IdentityRef `json:"requestedFor"`
+	ID            int             `json:"id"`
+	BuildNumber   string          `json:"buildNumber"`
+	Status        string          `json:"status"` // notStarted, inProgress, completed, cancelling
+	Result        string          `json:"result"` // succeeded, failed, canceled, partiallySucceeded
+	QueueTime     time.Time       `json:"queueTime"`
+	StartTime     *time.Time      `json:"startTime"`
+	FinishTime    *time.Time      `json:"finishTime"`
+	SourceBranch  string          `json:"sourceBranch"`
+	SourceVersion string          `json:"sourceVersion"`
+	RequestedFor  IdentityRef     `json:"requestedFor"`
 	Definition    BuildDefinition `json:"definition"`
-	Project       TeamProject `json:"project"`
-	URL           string      `json:"url"`
+	Project       TeamProject     `json:"project"`
+	URL           string          `json:"url"`
 }
 
 func (b *Build) WebURL() string {
@@ -179,10 +188,10 @@ type TimelineRecord struct {
 
 // BuildLog represents a log entry for a build.
 type BuildLog struct {
-	ID            int    `json:"id"`
-	Type          string `json:"type"`
-	URL           string `json:"url"`
-	LineCount     int    `json:"lineCount"`
+	ID        int    `json:"id"`
+	Type      string `json:"type"`
+	URL       string `json:"url"`
+	LineCount int    `json:"lineCount"`
 }
 
 // WIQL response.

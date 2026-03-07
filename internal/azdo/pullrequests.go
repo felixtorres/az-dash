@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/pmezard/go-difflib/difflib"
 )
 
 type PRSearchCriteria struct {
@@ -110,6 +112,15 @@ func (c *Client) GetPullRequestChanges(org, project, repoID string, prID, iterat
 	return &changes, nil
 }
 
+func (c *Client) GetBlobContent(org, project, repoID, objectID string) (string, error) {
+	apiURL := fmt.Sprintf("%s/git/repositories/%s/blobs/%s", c.projectURL(org, project), repoID, objectID)
+	body, err := c.getRaw(apiURL, nil, "text/plain")
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
 // GetPullRequestDiff fetches the diff content between iterations for generating unified diffs.
 func (c *Client) GetPullRequestDiff(org, project, repoID string, prID int) (string, error) {
 	iterations, err := c.GetPullRequestIterations(org, project, repoID, prID)
@@ -128,10 +139,100 @@ func (c *Client) GetPullRequestDiff(org, project, repoID string, prID int) (stri
 
 	var sb strings.Builder
 	for _, entry := range changes.ChangeEntries {
-		changeType := entry.ChangeType
-		path := entry.Item.Path
-		sb.WriteString(fmt.Sprintf("--- a%s\n+++ b%s\n", path, path))
-		sb.WriteString(fmt.Sprintf("@@ %s @@\n", changeType))
+		diff, err := c.buildChangeDiff(org, project, repoID, entry)
+		if err != nil {
+			sb.WriteString(fmt.Sprintf("--- a%s\n+++ b%s\n", entryPathOld(entry), entryPathNew(entry)))
+			sb.WriteString(fmt.Sprintf("@@ %s @@\n", entry.ChangeType))
+			sb.WriteString(fmt.Sprintf("[unable to load file contents: %v]\n", err))
+			continue
+		}
+		sb.WriteString(diff)
 	}
 	return sb.String(), nil
+}
+
+func (c *Client) buildChangeDiff(org, project, repoID string, entry PRChangeEntry) (string, error) {
+	oldPath := entryPathOld(entry)
+	newPath := entryPathNew(entry)
+	oldContent, err := c.contentForChange(org, project, repoID, entry, true)
+	if err != nil {
+		return "", err
+	}
+	newContent, err := c.contentForChange(org, project, repoID, entry, false)
+	if err != nil {
+		return "", err
+	}
+
+	ud := difflib.UnifiedDiff{
+		A:        difflib.SplitLines(oldContent),
+		B:        difflib.SplitLines(newContent),
+		FromFile: "a" + oldPath,
+		ToFile:   "b" + newPath,
+		Context:  3,
+	}
+
+	text, err := difflib.GetUnifiedDiffString(ud)
+	if err != nil {
+		return "", err
+	}
+	if text == "" {
+		return fmt.Sprintf("--- a%s\n+++ b%s\n", oldPath, newPath), nil
+	}
+	return text, nil
+}
+
+func (c *Client) contentForChange(org, project, repoID string, entry PRChangeEntry, old bool) (string, error) {
+	changeType := normalizeChangeType(entry.ChangeType)
+	if old {
+		if changeType == "add" {
+			return "", nil
+		}
+		path := entryPathOld(entry)
+		if path == "" {
+			return "", nil
+		}
+		version := entry.Item.OriginalObjectID
+		if version == "" {
+			version = entry.Item.ObjectID
+		}
+		if version == "" {
+			return "", nil
+		}
+		return c.GetBlobContent(org, project, repoID, version)
+	}
+
+	if changeType == "delete" {
+		return "", nil
+	}
+	path := entryPathNew(entry)
+	if path == "" {
+		return "", nil
+	}
+	if entry.NewContent != nil && entry.NewContent.ContentType == "rawText" {
+		return entry.NewContent.Content, nil
+	}
+	version := entry.Item.ObjectID
+	if version == "" {
+		return "", nil
+	}
+	return c.GetBlobContent(org, project, repoID, version)
+}
+
+func entryPathOld(entry PRChangeEntry) string {
+	if entry.OriginalPath != "" {
+		return entry.OriginalPath
+	}
+	return entry.Item.Path
+}
+
+func entryPathNew(entry PRChangeEntry) string {
+	return entry.Item.Path
+}
+
+func normalizeChangeType(changeType string) string {
+	parts := strings.Split(changeType, ",")
+	if len(parts) == 0 {
+		return changeType
+	}
+	return strings.TrimSpace(parts[0])
 }

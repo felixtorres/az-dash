@@ -130,6 +130,24 @@ func (c *Client) get(apiURL string, params url.Values, result interface{}) error
 	return c.doWithAuth(req, result)
 }
 
+func (c *Client) getRaw(apiURL string, params url.Values, accept string) ([]byte, error) {
+	if params == nil {
+		params = url.Values{}
+	}
+	params.Set("api-version", apiVersion)
+
+	fullURL := apiURL + "?" + params.Encode()
+	req, err := http.NewRequest("GET", fullURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+
+	return c.doRawWithAuth(req)
+}
+
 func (c *Client) post(apiURL string, body interface{}, result interface{}) error {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
@@ -225,23 +243,31 @@ func (c *Client) doWithAuth(req *http.Request, result interface{}) error {
 	return err
 }
 
-func (c *Client) doRequest(req *http.Request, result interface{}) error {
-	resp, err := c.httpClient.Do(req)
+func (c *Client) doRawWithAuth(req *http.Request) ([]byte, error) {
+	headerName, headerValue, err := c.auth.AuthHeader()
 	if err != nil {
-		return fmt.Errorf("HTTP request failed: %w", err)
+		return nil, err
 	}
-	defer resp.Body.Close()
+	req.Header.Set(headerName, headerValue)
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("reading response: %w", err)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &APIError{
-			StatusCode: resp.StatusCode,
-			Message:    string(body),
+	body, err := c.doRawRequest(req)
+	if err != nil && isUnauthorized(err) {
+		if azAuth, ok := c.auth.(*AzCliAuth); ok {
+			if _, refreshErr := azAuth.ForceRefresh(); refreshErr != nil {
+				return nil, err
+			}
+			headerName, headerValue, _ = c.auth.AuthHeader()
+			req.Header.Set(headerName, headerValue)
+			return c.doRawRequest(req)
 		}
+	}
+	return body, err
+}
+
+func (c *Client) doRequest(req *http.Request, result interface{}) error {
+	body, err := c.doRawRequest(req)
+	if err != nil {
+		return err
 	}
 
 	if result != nil {
@@ -250,6 +276,28 @@ func (c *Client) doRequest(req *http.Request, result interface{}) error {
 		}
 	}
 	return nil
+}
+
+func (c *Client) doRawRequest(req *http.Request) ([]byte, error) {
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &APIError{
+			StatusCode: resp.StatusCode,
+			Message:    string(body),
+		}
+	}
+
+	return body, nil
 }
 
 type APIError struct {

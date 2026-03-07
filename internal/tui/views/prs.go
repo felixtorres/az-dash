@@ -123,7 +123,7 @@ func (v *PRView) PageUp() {
 	}
 }
 
-func (v *PRView) TogglePreview() { v.showPreview = !v.showPreview }
+func (v *PRView) TogglePreview()   { v.showPreview = !v.showPreview }
 func (v *PRView) SetSize(w, h int) { v.width = w; v.height = h }
 
 func (v *PRView) currentSection() *prSection {
@@ -213,9 +213,9 @@ func (v *PRView) renderSectionTabs() string {
 
 func (v *PRView) renderTable(prs []azdo.PullRequest, width int) string {
 	columns := []table.Column{
-		{Title: "", Width: 2},        // status icon
-		{Title: "#", Width: 6},       // PR number
-		{Title: "Title"},             // flex
+		{Title: "", Width: 2},  // status icon
+		{Title: "#", Width: 6}, // PR number
+		{Title: "Title"},       // flex
 		{Title: "Author", Width: 16},
 		{Title: "Reviews", Width: 10},
 		{Title: "Branch", Width: 16},
@@ -294,17 +294,9 @@ func (v *PRView) renderPreview(width int) string {
 
 	// Merge status
 	if pr.MergeStatus != "" {
-		lines = append(lines, labelStyle.Render("  Merge Status"))
-		mergeIcon := "⊘"
-		switch pr.MergeStatus {
-		case "succeeded":
-			mergeIcon = "✓"
-		case "conflicts":
-			mergeIcon = "✗"
-		case "queued":
-			mergeIcon = "◌"
-		}
-		lines = append(lines, fmt.Sprintf("  %s %s", mergeIcon, pr.MergeStatus))
+		label, mergeIcon := mergeStatusDisplay(pr.MergeStatus)
+		lines = append(lines, labelStyle.Render("  Mergeability"))
+		lines = append(lines, fmt.Sprintf("  %s %s", mergeIcon, label))
 		lines = append(lines, "")
 	}
 
@@ -403,6 +395,25 @@ func voteIcon(vote int) string {
 		return "✗"
 	default:
 		return "○"
+	}
+}
+
+func mergeStatusDisplay(status string) (string, string) {
+	switch status {
+	case "succeeded":
+		return "mergeable", "✓"
+	case "conflicts":
+		return "conflicts", "✗"
+	case "queued":
+		return "checking", "◌"
+	case "rejectedByPolicy":
+		return "blocked by policy", "!"
+	case "failure":
+		return "merge failed", "✗"
+	case "notSet":
+		return "unknown", "⊘"
+	default:
+		return status, "⊘"
 	}
 }
 

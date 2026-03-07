@@ -17,7 +17,6 @@ func DiffCommand(client *azdo.Client, repoID string, prID int) *exec.Cmd {
 		diffContent = fmt.Sprintf("Error fetching diff for PR #%d: %v", prID, err)
 	}
 
-	// Write diff to temp file
 	tmpFile, tmpErr := os.CreateTemp("", "az-dash-diff-*.diff")
 	if tmpErr != nil {
 		return exec.Command("echo", "Failed to create temp file")
@@ -25,9 +24,10 @@ func DiffCommand(client *azdo.Client, repoID string, prID int) *exec.Cmd {
 	tmpFile.WriteString(diffContent)
 	tmpFile.Close()
 
-	// Try delta first, then less
+	// Try delta first, but fall back to less if delta rejects the diff.
 	if deltaPath, err := exec.LookPath("delta"); err == nil {
-		cmd := exec.Command(deltaPath, tmpFile.Name())
+		script := fmt.Sprintf("%q < %q || less -R %q", deltaPath, tmpFile.Name(), tmpFile.Name())
+		cmd := exec.Command("sh", "-c", script)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr

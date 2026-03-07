@@ -25,7 +25,7 @@ func newTestPRView() *PRView {
 func samplePRs() []azdo.PullRequest {
 	return []azdo.PullRequest{
 		{PullRequestID: 1, Title: "Fix auth bug", Status: "active",
-			CreatedBy: azdo.IdentityRef{DisplayName: "Alice"},
+			CreatedBy:     azdo.IdentityRef{DisplayName: "Alice"},
 			SourceRefName: "refs/heads/fix-auth", TargetRefName: "refs/heads/main",
 			Reviewers: []azdo.Reviewer{
 				{DisplayName: "Bob", Vote: 10},
@@ -241,6 +241,53 @@ func TestVoteString(t *testing.T) {
 	for _, tt := range tests {
 		if got := voteString(tt.vote); got != tt.want {
 			t.Errorf("voteString(%d) = %q, want %q", tt.vote, got, tt.want)
+		}
+	}
+}
+
+func TestPRPreviewMergeStatusDisplay(t *testing.T) {
+	v := newTestPRView()
+	v.SetSize(120, 40)
+	v.SetSectionData(0, []azdo.PullRequest{{
+		PullRequestID: 1,
+		Title:         "Test PR",
+		Status:        "active",
+		MergeStatus:   "succeeded",
+		CreatedBy:     azdo.IdentityRef{DisplayName: "Alice"},
+		SourceRefName: "refs/heads/feature",
+		TargetRefName: "refs/heads/main",
+	}})
+
+	output := v.View()
+	if !strings.Contains(output, "Mergeability") {
+		t.Fatalf("expected mergeability label, got: %q", output)
+	}
+	if !strings.Contains(output, "mergeable") {
+		t.Fatalf("expected friendly merge status, got: %q", output)
+	}
+	if strings.Contains(output, "Merge Status") {
+		t.Fatalf("expected old merge status label to be absent, got: %q", output)
+	}
+}
+
+func TestMergeStatusDisplay(t *testing.T) {
+	tests := []struct {
+		status    string
+		wantLabel string
+		wantIcon  string
+	}{
+		{"succeeded", "mergeable", "✓"},
+		{"conflicts", "conflicts", "✗"},
+		{"queued", "checking", "◌"},
+		{"rejectedByPolicy", "blocked by policy", "!"},
+		{"failure", "merge failed", "✗"},
+		{"notSet", "unknown", "⊘"},
+	}
+
+	for _, tt := range tests {
+		label, icon := mergeStatusDisplay(tt.status)
+		if label != tt.wantLabel || icon != tt.wantIcon {
+			t.Fatalf("mergeStatusDisplay(%q) = (%q, %q), want (%q, %q)", tt.status, label, icon, tt.wantLabel, tt.wantIcon)
 		}
 	}
 }

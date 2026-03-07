@@ -242,3 +242,63 @@ func TestGetPullRequestAPIError(t *testing.T) {
 		t.Errorf("StatusCode = %d", apiErr.StatusCode)
 	}
 }
+
+func TestGetPullRequestDiff(t *testing.T) {
+	var gotPaths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.URL.Path)
+
+		switch {
+		case strings.Contains(r.URL.Path, "/iterations") && !strings.Contains(r.URL.Path, "/changes"):
+			json.NewEncoder(w).Encode(ListResponse[PRIteration]{
+				Value: []PRIteration{{ID: 2}},
+			})
+		case strings.Contains(r.URL.Path, "/changes"):
+			json.NewEncoder(w).Encode(PRChanges{
+				ChangeEntries: []PRChangeEntry{{
+					ChangeType: "edit",
+					Item: PRChangeItem{
+						Path:             "/README.md",
+						ObjectID:         "new-sha",
+						OriginalObjectID: "old-sha",
+					},
+				}},
+			})
+		case strings.Contains(r.URL.Path, "/blobs/"):
+			if strings.HasSuffix(r.URL.Path, "/old-sha") {
+				w.Write([]byte("old\nline\n"))
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/new-sha") {
+				w.Write([]byte("new\nline\n"))
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	c := newTestClient(server)
+	diff, err := c.GetPullRequestDiff("", "", "repo-id", 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(diff, "--- a/README.md") {
+		t.Fatalf("diff missing old path header: %q", diff)
+	}
+	if !strings.Contains(diff, "+++ b/README.md") {
+		t.Fatalf("diff missing new path header: %q", diff)
+	}
+	if !strings.Contains(diff, "-old") {
+		t.Fatalf("diff missing removed content: %q", diff)
+	}
+	if !strings.Contains(diff, "+new") {
+		t.Fatalf("diff missing added content: %q", diff)
+	}
+	if len(gotPaths) != 4 {
+		t.Fatalf("got %d requests, want 4", len(gotPaths))
+	}
+}
