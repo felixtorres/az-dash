@@ -125,6 +125,116 @@ prSections:
 	}
 }
 
+func TestLoadMissingProject(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yml")
+	os.WriteFile(cfgPath, []byte("organization: my-org\nprSections:\n  - title: x\n    filters:\n      status: active\n"), 0644)
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for missing project")
+	}
+}
+
+func TestLoadInvalidPRStatus(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yml")
+	os.WriteFile(cfgPath, []byte("organization: o\nproject: p\nprSections:\n  - title: x\n    filters:\n      status: bogus\n"), 0644)
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for invalid PR status")
+	}
+}
+
+func TestLoadMissingSectionTitle(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yml")
+	os.WriteFile(cfgPath, []byte("organization: o\nproject: p\nprSections:\n  - filters:\n      status: active\n"), 0644)
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for missing section title")
+	}
+}
+
+func TestLoadWIQLRequired(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yml")
+	os.WriteFile(cfgPath, []byte("organization: o\nproject: p\nworkItemSections:\n  - title: x\n"), 0644)
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for missing WIQL")
+	}
+}
+
+func TestLoadCustomBaseURL(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yml")
+	os.WriteFile(cfgPath, []byte("organization: o\nproject: p\nbaseUrl: https://myserver/collection\nprSections:\n  - title: x\n    filters:\n      status: active\n"), 0644)
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BaseURL != "https://myserver/collection" {
+		t.Errorf("BaseURL = %q", cfg.BaseURL)
+	}
+}
+
+func TestLoadCustomLimits(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yml")
+	os.WriteFile(cfgPath, []byte("organization: o\nproject: p\nprSections:\n  - title: x\n    limit: 50\n    filters:\n      status: active\n"), 0644)
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PRSections[0].Limit != 50 {
+		t.Errorf("Limit = %d, want 50", cfg.PRSections[0].Limit)
+	}
+}
+
+func TestLoadInvalidYAML(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yml")
+	os.WriteFile(cfgPath, []byte("{{invalid yaml"), 0644)
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for invalid YAML")
+	}
+}
+
+func TestLoadPerSectionOrgOverride(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yml")
+	content := `
+organization: default-org
+project: default-proj
+prSections:
+  - title: Other
+    organization: other-org
+    project: other-proj
+    filters:
+      status: active
+`
+	os.WriteFile(cfgPath, []byte(content), 0644)
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PRSections[0].Organization != "other-org" {
+		t.Errorf("section org = %q", cfg.PRSections[0].Organization)
+	}
+	if cfg.PRSections[0].Project != "other-proj" {
+		t.Errorf("section project = %q", cfg.PRSections[0].Project)
+	}
+}
+
 func TestApplyDefaults(t *testing.T) {
 	cfg := Config{
 		Organization: "org",
