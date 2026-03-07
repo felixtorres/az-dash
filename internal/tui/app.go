@@ -68,6 +68,7 @@ type Model struct {
 	ready      bool
 	bootErr    error
 	statusMsg  string
+	showHelp   bool
 }
 
 func Start(cfg *config.Config) error {
@@ -207,8 +208,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleKeypress(msg tea.KeyMsg) tea.Cmd {
+	// Help toggle
+	if m.showHelp {
+		if key.Matches(msg, keys.Global.Quit) || key.Matches(msg, keys.Global.Help) || msg.String() == "esc" {
+			m.showHelp = false
+		}
+		return nil
+	}
+
 	// Global keys
 	switch {
+	case key.Matches(msg, keys.Global.Help):
+		m.showHelp = true
+		return nil
 	case key.Matches(msg, keys.Global.Quit):
 		return tea.Quit
 	case key.Matches(msg, keys.Global.ViewPRs):
@@ -241,6 +253,12 @@ func (m *Model) handleKeypress(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	case key.Matches(msg, keys.Global.LastLine):
 		m.activeViewPtr().CursorLast()
+		return nil
+	case key.Matches(msg, keys.Global.PageDown):
+		m.activeViewPtr().PageDown()
+		return nil
+	case key.Matches(msg, keys.Global.PageUp):
+		m.activeViewPtr().PageUp()
 		return nil
 	case key.Matches(msg, keys.Global.TogglePreview):
 		m.activeViewPtr().TogglePreview()
@@ -568,6 +586,10 @@ func (m Model) View() string {
 		return m.renderLoading("Connecting to Azure DevOps...")
 	}
 
+	if m.showHelp {
+		return m.renderHelp()
+	}
+
 	var b strings.Builder
 	b.WriteString(m.renderTabs())
 	b.WriteString("\n")
@@ -612,21 +634,81 @@ func (m *Model) renderTabs() string {
 }
 
 func (m *Model) renderStatusBar() string {
-	left := m.theme.StatusBar.Render(fmt.Sprintf(" %s/%s", m.cfg.Organization, m.cfg.Project))
+	barStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#e0e0e0")).
+		Background(lipgloss.Color("#1c2128"))
+
+	left := barStyle.Render(fmt.Sprintf(" %s/%s ", m.cfg.Organization, m.cfg.Project))
 
 	middle := ""
 	if m.statusMsg != "" {
-		middle = "  " + m.statusMsg
+		middle = barStyle.Render("  " + m.statusMsg + " ")
 	}
 
-	right := m.theme.StatusBar.Render("? help  q quit ")
+	// Contextual hints
+	var hints string
+	switch m.activeView {
+	case ViewPRs:
+		hints = "v approve  m merge  d diff  "
+	case ViewWorkItems:
+		hints = "a assign  S state  "
+	case ViewPipelines:
+		hints = "x cancel  l logs  "
+	}
+	right := barStyle.Render(hints + "? help  q quit ")
 
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(middle) - lipgloss.Width(right)
 	if gap < 0 {
 		gap = 0
 	}
 
-	return left + middle + strings.Repeat(" ", gap) + right
+	return left + barStyle.Width(gap).Render(strings.Repeat(" ", gap)) + middle + right
+}
+
+func (m *Model) renderHelp() string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffffff"))
+	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#58a6ff"))
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
+
+	entry := func(k, d string) string {
+		return fmt.Sprintf("  %s %s", keyStyle.Width(14).Render(k), descStyle.Render(d))
+	}
+
+	var lines []string
+	lines = append(lines, "")
+	lines = append(lines, titleStyle.Render("  az-dash — Keyboard Shortcuts"))
+	lines = append(lines, "")
+	lines = append(lines, titleStyle.Render("  Navigation"))
+	lines = append(lines, entry("j / k", "Move down / up"))
+	lines = append(lines, entry("g / G", "First / last item"))
+	lines = append(lines, entry("Ctrl+d / u", "Page down / up"))
+	lines = append(lines, entry("Tab / S-Tab", "Next / prev section"))
+	lines = append(lines, entry("1 / 2 / 3", "PRs / Work Items / Pipelines"))
+	lines = append(lines, "")
+	lines = append(lines, titleStyle.Render("  General"))
+	lines = append(lines, entry("p", "Toggle preview pane"))
+	lines = append(lines, entry("r / R", "Refresh section / all"))
+	lines = append(lines, entry("o", "Open in browser"))
+	lines = append(lines, entry("y", "Copy URL"))
+	lines = append(lines, entry("#", "Copy ID"))
+	lines = append(lines, "")
+	lines = append(lines, titleStyle.Render("  Pull Requests"))
+	lines = append(lines, entry("v", "Approve"))
+	lines = append(lines, entry("m", "Complete (merge)"))
+	lines = append(lines, entry("x / X", "Abandon / reactivate"))
+	lines = append(lines, entry("d", "View diff"))
+	lines = append(lines, "")
+	lines = append(lines, titleStyle.Render("  Work Items"))
+	lines = append(lines, entry("a / A", "Assign to me / unassign"))
+	lines = append(lines, entry("S", "Cycle state"))
+	lines = append(lines, "")
+	lines = append(lines, titleStyle.Render("  Pipelines"))
+	lines = append(lines, entry("x", "Cancel build"))
+	lines = append(lines, entry("l", "View logs"))
+	lines = append(lines, "")
+	lines = append(lines, descStyle.Render("  Press ? or Esc to close"))
+
+	return strings.Join(lines, "\n")
 }
 
 func (m *Model) renderLoading(msg string) string {

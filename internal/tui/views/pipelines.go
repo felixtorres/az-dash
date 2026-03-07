@@ -8,6 +8,7 @@ import (
 
 	"github.com/felixtorres/az-dash/internal/azdo"
 	"github.com/felixtorres/az-dash/internal/config"
+	"github.com/felixtorres/az-dash/internal/tui/components/table"
 	"github.com/felixtorres/az-dash/internal/tui/theme"
 	"github.com/felixtorres/az-dash/internal/utils"
 )
@@ -16,6 +17,7 @@ type PipelineView struct {
 	sections      []pipeSection
 	activeSection int
 	cursor        int
+	scrollOffset  int
 	showPreview   bool
 	width, height int
 	theme         *theme.Theme
@@ -60,6 +62,7 @@ func (v *PipelineView) NextSection() {
 	if len(v.sections) > 0 {
 		v.activeSection = (v.activeSection + 1) % len(v.sections)
 		v.cursor = 0
+		v.scrollOffset = 0
 	}
 }
 
@@ -67,6 +70,7 @@ func (v *PipelineView) PrevSection() {
 	if len(v.sections) > 0 {
 		v.activeSection = (v.activeSection - 1 + len(v.sections)) % len(v.sections)
 		v.cursor = 0
+		v.scrollOffset = 0
 	}
 }
 
@@ -84,12 +88,38 @@ func (v *PipelineView) CursorDown() {
 }
 
 func (v *PipelineView) ActiveSectionIndex() int { return v.activeSection }
-func (v *PipelineView) CursorFirst() { v.cursor = 0 }
+func (v *PipelineView) CursorFirst()            { v.cursor = 0; v.scrollOffset = 0 }
 
 func (v *PipelineView) CursorLast() {
 	s := v.currentSection()
 	if s != nil && len(s.data) > 0 {
 		v.cursor = len(s.data) - 1
+	}
+}
+
+func (v *PipelineView) PageDown() {
+	s := v.currentSection()
+	if s == nil {
+		return
+	}
+	pageSize := v.height - 5
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	v.cursor += pageSize
+	if v.cursor >= len(s.data) {
+		v.cursor = len(s.data) - 1
+	}
+}
+
+func (v *PipelineView) PageUp() {
+	pageSize := v.height - 5
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	v.cursor -= pageSize
+	if v.cursor < 0 {
+		v.cursor = 0
 	}
 }
 
@@ -141,18 +171,27 @@ func (v *PipelineView) View() string {
 	}
 
 	tableWidth := v.width
+	previewWidth := 0
 	if v.showPreview {
 		tableWidth = v.width * 55 / 100
+		previewWidth = v.width - tableWidth - 1
 	}
 
-	table := v.renderTable(s.data, tableWidth)
+	tableStr := v.renderTable(s.data, tableWidth)
 
-	if v.showPreview {
-		previewWidth := v.width - tableWidth - 3
+	if v.showPreview && previewWidth > 10 {
 		preview := v.renderPreview(previewWidth)
-		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, table, " │ ", preview))
+		divider := v.theme.Border.
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderLeft(true).
+			BorderTop(false).
+			BorderBottom(false).
+			BorderRight(false).
+			Height(lipgloss.Height(tableStr)).
+			Render("")
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, tableStr, divider, preview))
 	} else {
-		b.WriteString(table)
+		b.WriteString(tableStr)
 	}
 
 	return b.String()
@@ -172,40 +211,48 @@ func (v *PipelineView) renderSectionTabs() string {
 }
 
 func (v *PipelineView) renderTable(builds []azdo.Build, width int) string {
-	var rows []string
+	columns := []table.Column{
+		{Title: "", Width: 2},           // status icon
+		{Title: "Pipeline"},             // flex
+		{Title: "Branch", Width: 18},
+		{Title: "Status", Width: 10},
+		{Title: "Duration", Width: 8},
+		{Title: "Triggered By", Width: 16},
+		{Title: "Finished", Width: 8},
+	}
 
-	nameWidth := width - 60
-	header := fmt.Sprintf("  %-*s %-18s %-10s %-10s %-10s",
-		nameWidth, "Pipeline", "Branch", "Status", "Duration", "Finished")
-	rows = append(rows, v.theme.FaintText.Render(header))
-
+	rows := make([]table.Row, len(builds))
 	for i, build := range builds {
-		name := utils.TruncateString(build.Definition.Name, nameWidth)
-		branch := utils.TruncateString(trimRef(build.SourceBranch), 18)
+		icon := buildStatusIcon(build)
 
-		status := build.Status
-		if build.Result != "" {
-			status = build.Result
+		status := build.Result
+		if status == "" {
+			status = build.Status
 		}
 
-		duration := utils.FormatDuration(build.Duration())
-
-		finished := "-"
+		finished := "—"
 		if build.FinishTime != nil {
 			finished = utils.RelativeTime(*build.FinishTime)
 		}
 
-		row := fmt.Sprintf("  %-*s %-18s %-10s %-10s %-10s",
-			nameWidth, name, branch, status, duration, finished)
-
-		if i == v.cursor {
-			rows = append(rows, v.theme.SelectedRow.Render(row))
-		} else {
-			rows = append(rows, v.buildStatusStyle(build).Render(row))
+		rows[i] = table.Row{
+			Cells: []string{
+				icon,
+				build.Definition.Name,
+				utils.TruncateString(trimRef(build.SourceBranch), 18),
+				status,
+				utils.FormatDuration(build.Duration()),
+				utils.TruncateString(build.RequestedFor.DisplayName, 16),
+				finished,
+			},
+			Style: v.buildStatusStyle(build),
 		}
 	}
 
-	return strings.Join(rows, "\n")
+	styles := table.DefaultStyles()
+	result, newOffset := table.Render(columns, rows, width, v.height-3, v.cursor, v.scrollOffset, styles)
+	v.scrollOffset = newOffset
+	return result
 }
 
 func (v *PipelineView) renderPreview(width int) string {
@@ -214,24 +261,34 @@ func (v *PipelineView) renderPreview(width int) string {
 		return ""
 	}
 
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffffff")).Width(width)
+	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#58a6ff"))
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
+
 	var lines []string
-	lines = append(lines, v.theme.Title.Render(utils.TruncateString(build.Definition.Name, width)))
+
+	icon := buildStatusIcon(*build)
+	status := build.Result
+	if status == "" {
+		status = build.Status
+	}
+
+	lines = append(lines, titleStyle.Render(build.Definition.Name))
 	lines = append(lines, "")
-	lines = append(lines, v.theme.FaintText.Render(fmt.Sprintf("Run #%d  %s", build.ID, build.BuildNumber)))
-	lines = append(lines, v.theme.FaintText.Render(fmt.Sprintf("Branch: %s", trimRef(build.SourceBranch))))
-	lines = append(lines, v.theme.FaintText.Render(fmt.Sprintf("Triggered by: %s", build.RequestedFor.DisplayName)))
+	lines = append(lines, dimStyle.Render(fmt.Sprintf("  %s Run #%d  %s", icon, build.ID, build.BuildNumber)))
+	lines = append(lines, "")
 
-	status := build.Status
-	if build.Result != "" {
-		status = build.Result
+	fields := []struct{ label, value string }{
+		{"Status", fmt.Sprintf("%s %s", icon, status)},
+		{"Branch", trimRef(build.SourceBranch)},
+		{"Triggered", build.RequestedFor.DisplayName},
+		{"Duration", utils.FormatDuration(build.Duration())},
+		{"Commit", utils.TruncateString(build.SourceVersion, 8)},
 	}
-	lines = append(lines, v.theme.FaintText.Render(fmt.Sprintf("Status: %s", status)))
-
-	if build.Duration() > 0 {
-		lines = append(lines, v.theme.FaintText.Render(fmt.Sprintf("Duration: %s", utils.FormatDuration(build.Duration()))))
+	for _, f := range fields {
+		lines = append(lines, fmt.Sprintf("  %s  %s",
+			labelStyle.Width(12).Render(f.label), dimStyle.Render(f.value)))
 	}
-
-	lines = append(lines, v.theme.FaintText.Render(fmt.Sprintf("Commit: %s", utils.TruncateString(build.SourceVersion, 8))))
 
 	return strings.Join(lines, "\n")
 }
@@ -241,7 +298,6 @@ func (v *PipelineView) buildStatusStyle(build azdo.Build) lipgloss.Style {
 	if result == "" {
 		result = build.Status
 	}
-
 	switch result {
 	case "succeeded":
 		return v.theme.PipeSucceeded
@@ -253,5 +309,28 @@ func (v *PipelineView) buildStatusStyle(build azdo.Build) lipgloss.Style {
 		return v.theme.PipeCanceled
 	default:
 		return v.theme.Text
+	}
+}
+
+func buildStatusIcon(build azdo.Build) string {
+	result := build.Result
+	if result == "" {
+		result = build.Status
+	}
+	switch result {
+	case "succeeded":
+		return "✓"
+	case "partiallySucceeded":
+		return "◐"
+	case "failed":
+		return "✗"
+	case "inProgress":
+		return "●"
+	case "notStarted":
+		return "◌"
+	case "canceled", "cancelling":
+		return "⊘"
+	default:
+		return "○"
 	}
 }

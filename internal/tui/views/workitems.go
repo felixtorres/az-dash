@@ -8,6 +8,7 @@ import (
 
 	"github.com/felixtorres/az-dash/internal/azdo"
 	"github.com/felixtorres/az-dash/internal/config"
+	"github.com/felixtorres/az-dash/internal/tui/components/table"
 	"github.com/felixtorres/az-dash/internal/tui/theme"
 	"github.com/felixtorres/az-dash/internal/utils"
 )
@@ -16,6 +17,7 @@ type WorkItemView struct {
 	sections      []wiSection
 	activeSection int
 	cursor        int
+	scrollOffset  int
 	showPreview   bool
 	width, height int
 	theme         *theme.Theme
@@ -60,6 +62,7 @@ func (v *WorkItemView) NextSection() {
 	if len(v.sections) > 0 {
 		v.activeSection = (v.activeSection + 1) % len(v.sections)
 		v.cursor = 0
+		v.scrollOffset = 0
 	}
 }
 
@@ -67,6 +70,7 @@ func (v *WorkItemView) PrevSection() {
 	if len(v.sections) > 0 {
 		v.activeSection = (v.activeSection - 1 + len(v.sections)) % len(v.sections)
 		v.cursor = 0
+		v.scrollOffset = 0
 	}
 }
 
@@ -84,12 +88,38 @@ func (v *WorkItemView) CursorDown() {
 }
 
 func (v *WorkItemView) ActiveSectionIndex() int { return v.activeSection }
-func (v *WorkItemView) CursorFirst() { v.cursor = 0 }
+func (v *WorkItemView) CursorFirst()            { v.cursor = 0; v.scrollOffset = 0 }
 
 func (v *WorkItemView) CursorLast() {
 	s := v.currentSection()
 	if s != nil && len(s.data) > 0 {
 		v.cursor = len(s.data) - 1
+	}
+}
+
+func (v *WorkItemView) PageDown() {
+	s := v.currentSection()
+	if s == nil {
+		return
+	}
+	pageSize := v.height - 5
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	v.cursor += pageSize
+	if v.cursor >= len(s.data) {
+		v.cursor = len(s.data) - 1
+	}
+}
+
+func (v *WorkItemView) PageUp() {
+	pageSize := v.height - 5
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	v.cursor -= pageSize
+	if v.cursor < 0 {
+		v.cursor = 0
 	}
 }
 
@@ -141,18 +171,27 @@ func (v *WorkItemView) View() string {
 	}
 
 	tableWidth := v.width
+	previewWidth := 0
 	if v.showPreview {
 		tableWidth = v.width * 55 / 100
+		previewWidth = v.width - tableWidth - 1
 	}
 
-	table := v.renderTable(s.data, tableWidth)
+	tableStr := v.renderTable(s.data, tableWidth)
 
-	if v.showPreview {
-		previewWidth := v.width - tableWidth - 3
+	if v.showPreview && previewWidth > 10 {
 		preview := v.renderPreview(previewWidth)
-		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, table, " │ ", preview))
+		divider := v.theme.Border.
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderLeft(true).
+			BorderTop(false).
+			BorderBottom(false).
+			BorderRight(false).
+			Height(lipgloss.Height(tableStr)).
+			Render("")
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, tableStr, divider, preview))
 	} else {
-		b.WriteString(table)
+		b.WriteString(tableStr)
 	}
 
 	return b.String()
@@ -172,30 +211,41 @@ func (v *WorkItemView) renderSectionTabs() string {
 }
 
 func (v *WorkItemView) renderTable(items []azdo.WorkItem, width int) string {
-	var rows []string
+	columns := []table.Column{
+		{Title: "", Width: 2},          // type icon
+		{Title: "ID", Width: 7},
+		{Title: "Type", Width: 8},
+		{Title: "Title"},               // flex
+		{Title: "State", Width: 10},
+		{Title: "Assigned To", Width: 16},
+		{Title: "Priority", Width: 4},
+	}
 
-	titleWidth := width - 48
-	header := fmt.Sprintf("  %-6s %-8s %-*s %-10s %-12s",
-		"ID", "Type", titleWidth, "Title", "State", "Assigned To")
-	rows = append(rows, v.theme.FaintText.Render(header))
-
+	rows := make([]table.Row, len(items))
 	for i, wi := range items {
-		wiType := utils.TruncateString(wi.StringField("System.WorkItemType"), 8)
-		title := utils.TruncateString(wi.StringField("System.Title"), titleWidth)
-		state := utils.TruncateString(wi.StringField("System.State"), 10)
-		assignedTo := utils.TruncateString(wi.StringField("System.AssignedTo"), 12)
+		wiType := wi.StringField("System.WorkItemType")
+		icon := wiTypeIcon(wiType)
+		state := wi.StringField("System.State")
+		priority := wi.StringField("Microsoft.VSTS.Common.Priority")
 
-		row := fmt.Sprintf("  %-6d %-8s %-*s %-10s %-12s",
-			wi.ID, wiType, titleWidth, title, state, assignedTo)
-
-		if i == v.cursor {
-			rows = append(rows, v.theme.SelectedRow.Render(row))
-		} else {
-			rows = append(rows, v.wiStateStyle(state).Render(row))
+		rows[i] = table.Row{
+			Cells: []string{
+				icon,
+				fmt.Sprintf("%d", wi.ID),
+				utils.TruncateString(wiType, 8),
+				wi.StringField("System.Title"),
+				state,
+				utils.TruncateString(wi.StringField("System.AssignedTo"), 16),
+				priority,
+			},
+			Style: v.wiStateStyle(state),
 		}
 	}
 
-	return strings.Join(rows, "\n")
+	styles := table.DefaultStyles()
+	result, newOffset := table.Render(columns, rows, width, v.height-3, v.cursor, v.scrollOffset, styles)
+	v.scrollOffset = newOffset
+	return result
 }
 
 func (v *WorkItemView) renderPreview(width int) string {
@@ -204,23 +254,53 @@ func (v *WorkItemView) renderPreview(width int) string {
 		return ""
 	}
 
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffffff")).Width(width)
+	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#58a6ff"))
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
+
 	var lines []string
-	lines = append(lines, v.theme.Title.Render(utils.TruncateString(wi.StringField("System.Title"), width)))
+
+	wiType := wi.StringField("System.WorkItemType")
+	state := wi.StringField("System.State")
+
+	lines = append(lines, titleStyle.Render(utils.TruncateString(wi.StringField("System.Title"), width)))
 	lines = append(lines, "")
-	lines = append(lines, v.theme.FaintText.Render(fmt.Sprintf("#%d  %s  %s",
-		wi.ID, wi.StringField("System.WorkItemType"), wi.StringField("System.State"))))
-	lines = append(lines, v.theme.FaintText.Render(fmt.Sprintf("Assigned: %s", wi.StringField("System.AssignedTo"))))
-	lines = append(lines, v.theme.FaintText.Render(fmt.Sprintf("Area: %s", wi.StringField("System.AreaPath"))))
-	lines = append(lines, v.theme.FaintText.Render(fmt.Sprintf("Iteration: %s", wi.StringField("System.IterationPath"))))
+	lines = append(lines, dimStyle.Render(fmt.Sprintf("  %s #%d  %s  [%s]",
+		wiTypeIcon(wiType), wi.ID, wiType, state)))
 	lines = append(lines, "")
 
+	// Fields
+	fields := []struct{ label, field string }{
+		{"Assigned To", "System.AssignedTo"},
+		{"Area", "System.AreaPath"},
+		{"Iteration", "System.IterationPath"},
+		{"Priority", "Microsoft.VSTS.Common.Priority"},
+		{"Tags", "System.Tags"},
+	}
+	for _, f := range fields {
+		val := wi.StringField(f.field)
+		if val != "" {
+			lines = append(lines, fmt.Sprintf("  %s  %s",
+				labelStyle.Width(14).Render(f.label), dimStyle.Render(val)))
+		}
+	}
+	lines = append(lines, "")
+
+	// Description
 	desc := wi.StringField("System.Description")
 	if desc != "" {
-		lines = append(lines, v.theme.Title.Render("Description"))
-		if len(desc) > 500 {
-			desc = desc[:500] + "..."
+		lines = append(lines, labelStyle.Render("  Description"))
+		// Strip HTML tags (basic)
+		desc = stripHTML(desc)
+		if len(desc) > 800 {
+			desc = desc[:800] + "..."
 		}
-		lines = append(lines, desc)
+		for _, line := range strings.Split(desc, "\n") {
+			if len(line) > width-4 {
+				line = line[:width-4]
+			}
+			lines = append(lines, "  "+line)
+		}
 	}
 
 	return strings.Join(lines, "\n")
@@ -228,15 +308,53 @@ func (v *WorkItemView) renderPreview(width int) string {
 
 func (v *WorkItemView) wiStateStyle(state string) lipgloss.Style {
 	switch strings.ToLower(state) {
-	case "new":
+	case "new", "to do":
 		return v.theme.WINew
-	case "active":
+	case "active", "doing", "in progress":
 		return v.theme.WIActive
-	case "resolved":
+	case "resolved", "done":
 		return v.theme.WIResolved
-	case "closed", "done":
+	case "closed", "removed":
 		return v.theme.WIClosed
 	default:
 		return v.theme.Text
 	}
+}
+
+func wiTypeIcon(wiType string) string {
+	switch strings.ToLower(wiType) {
+	case "bug":
+		return "🐛"
+	case "task":
+		return "☑"
+	case "user story", "story":
+		return "📖"
+	case "epic":
+		return "⚡"
+	case "feature":
+		return "★"
+	case "issue":
+		return "⚠"
+	default:
+		return "•"
+	}
+}
+
+func stripHTML(s string) string {
+	var result strings.Builder
+	inTag := false
+	for _, r := range s {
+		if r == '<' {
+			inTag = true
+			continue
+		}
+		if r == '>' {
+			inTag = false
+			continue
+		}
+		if !inTag {
+			result.WriteRune(r)
+		}
+	}
+	return result.String()
 }

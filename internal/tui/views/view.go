@@ -9,6 +9,8 @@ type View interface {
 	CursorDown()
 	CursorFirst()
 	CursorLast()
+	PageDown()
+	PageUp()
 	TogglePreview()
 	SetSize(width, height int)
 	View() string
