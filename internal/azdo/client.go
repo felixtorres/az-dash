@@ -13,12 +13,13 @@ import (
 const apiVersion = "7.1"
 
 type Client struct {
-	baseURL      string
-	organization string
-	project      string
-	auth         AuthProvider
-	httpClient   *http.Client
-	userID       string // resolved @me GUID
+	baseURL         string
+	organization    string
+	project         string
+	auth            AuthProvider
+	httpClient      *http.Client
+	userID          string // resolved @me GUID
+	userDisplayName string
 }
 
 func NewClient(baseURL, organization, project string, auth AuthProvider) *Client {
@@ -34,17 +35,24 @@ func NewClient(baseURL, organization, project string, auth AuthProvider) *Client
 }
 
 // Bootstrap resolves the current user's ID for @me substitution.
+// Uses the org-scoped connectionData endpoint which works with both
+// PATs and az CLI tokens (the VSSPS profile endpoint requires broader scoping).
 func (c *Client) Bootstrap() error {
-	profile, err := c.getProfile()
+	connData, err := c.getConnectionData()
 	if err != nil {
-		return fmt.Errorf("resolving user profile: %w", err)
+		return fmt.Errorf("resolving user identity: %w", err)
 	}
-	c.userID = profile.ID
+	c.userID = connData.AuthenticatedUser.ID
+	c.userDisplayName = connData.AuthenticatedUser.ProviderDisplayName
 	return nil
 }
 
 func (c *Client) UserID() string {
 	return c.userID
+}
+
+func (c *Client) UserDisplayName() string {
+	return c.userDisplayName
 }
 
 // ResolveMe replaces "@me" with the actual user GUID.
@@ -55,8 +63,22 @@ func (c *Client) ResolveMe(value string) string {
 	return value
 }
 
-func (c *Client) getProfile() (*Profile, error) {
-	req, err := http.NewRequest("GET", "https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version="+apiVersion, nil)
+type connectionData struct {
+	AuthenticatedUser connectionUser `json:"authenticatedUser"`
+}
+
+type connectionUser struct {
+	ID                  string `json:"id"`
+	ProviderDisplayName string `json:"providerDisplayName"`
+}
+
+func (c *Client) getConnectionData() (*connectionData, error) {
+	apiURL := fmt.Sprintf("%s/%s/_apis/connectionData", c.baseURL, c.organization)
+	params := url.Values{}
+	params.Set("api-version", apiVersion+"-preview")
+
+	fullURL := apiURL + "?" + params.Encode()
+	req, err := http.NewRequest("GET", fullURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -67,11 +89,11 @@ func (c *Client) getProfile() (*Profile, error) {
 	}
 	req.Header.Set(headerName, headerValue)
 
-	var profile Profile
-	if err := c.doRequest(req, &profile); err != nil {
+	var data connectionData
+	if err := c.doRequest(req, &data); err != nil {
 		return nil, err
 	}
-	return &profile, nil
+	return &data, nil
 }
 
 // projectURL builds the base URL for project-scoped API calls.
@@ -115,6 +137,22 @@ func (c *Client) post(apiURL string, body interface{}, result interface{}) error
 	}
 
 	fullURL := apiURL + "?api-version=" + apiVersion
+	req, err := http.NewRequest("POST", fullURL, strings.NewReader(string(jsonBody)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	return c.doWithAuth(req, result)
+}
+
+// postRaw sends a POST without appending api-version (caller handles it).
+func (c *Client) postRaw(fullURL string, body interface{}, result interface{}) error {
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshaling request body: %w", err)
+	}
+
 	req, err := http.NewRequest("POST", fullURL, strings.NewReader(string(jsonBody)))
 	if err != nil {
 		return err

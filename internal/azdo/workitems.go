@@ -7,18 +7,21 @@ import (
 )
 
 // QueryWorkItems runs a WIQL query and returns full work item data.
+// $top is sent as a query parameter to limit results from the WIQL endpoint.
 func (c *Client) QueryWorkItems(org, project, wiql string, top int) ([]WorkItem, error) {
 	apiURL := fmt.Sprintf("%s/wit/wiql", c.projectURL(org, project))
+	if top > 0 {
+		apiURL += fmt.Sprintf("?$top=%d&api-version=%s", top, apiVersion)
+	} else {
+		apiURL += "?api-version=" + apiVersion
+	}
 
 	body := map[string]interface{}{
 		"query": wiql,
 	}
-	if top > 0 {
-		body["$top"] = top
-	}
 
 	var result WIQLResult
-	if err := c.post(apiURL, body, &result); err != nil {
+	if err := c.postRaw(apiURL, body, &result); err != nil {
 		return nil, err
 	}
 
