@@ -177,6 +177,14 @@ type TimelineRecord struct {
 	Order      int        `json:"order"`
 }
 
+// BuildLog represents a log entry for a build.
+type BuildLog struct {
+	ID            int    `json:"id"`
+	Type          string `json:"type"`
+	URL           string `json:"url"`
+	LineCount     int    `json:"lineCount"`
+}
+
 // WIQL response.
 type WIQLResult struct {
 	WorkItems []WIQLWorkItemRef `json:"workItems"`

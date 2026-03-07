@@ -289,10 +289,36 @@ func (m *Model) handlePRKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *Model) handleWorkItemKey(msg tea.KeyMsg) tea.Cmd {
+	wi := m.wiView.SelectedWorkItem()
+	if wi == nil {
+		return nil
+	}
+
+	switch {
+	case key.Matches(msg, keys.WorkItem.Assign):
+		return m.assignWorkItem(wi)
+	case key.Matches(msg, keys.WorkItem.Unassign):
+		return m.unassignWorkItem(wi)
+	case key.Matches(msg, keys.WorkItem.ChangeState):
+		return m.cycleWorkItemState(wi)
+	}
+
 	return nil
 }
 
 func (m *Model) handlePipelineKey(msg tea.KeyMsg) tea.Cmd {
+	build := m.pipeView.SelectedBuild()
+	if build == nil {
+		return nil
+	}
+
+	switch {
+	case key.Matches(msg, keys.Pipeline.Cancel):
+		return m.cancelBuild(build)
+	case key.Matches(msg, keys.Pipeline.Logs):
+		return m.viewBuildLogs(build)
+	}
+
 	return nil
 }
 
@@ -421,6 +447,95 @@ func (m *Model) viewDiff(pr *azdo.PullRequest) tea.Cmd {
 				return actionResultMsg{err: fmt.Errorf("diff: %w", err)}
 			}
 			return actionResultMsg{msg: "Diff closed"}
+		},
+	)
+}
+
+// --- Work Item Actions ---
+
+func (m *Model) assignWorkItem(wi *azdo.WorkItem) tea.Cmd {
+	client := m.client
+	wiID := wi.ID
+	userName := client.UserDisplayName()
+
+	return func() tea.Msg {
+		err := client.UpdateWorkItemField("", "", wiID, "System.AssignedTo", userName)
+		if err != nil {
+			return actionResultMsg{err: fmt.Errorf("assign WI #%d: %w", wiID, err)}
+		}
+		return actionResultMsg{msg: fmt.Sprintf("Assigned WI #%d to you", wiID)}
+	}
+}
+
+func (m *Model) unassignWorkItem(wi *azdo.WorkItem) tea.Cmd {
+	client := m.client
+	wiID := wi.ID
+
+	return func() tea.Msg {
+		err := client.UpdateWorkItemField("", "", wiID, "System.AssignedTo", "")
+		if err != nil {
+			return actionResultMsg{err: fmt.Errorf("unassign WI #%d: %w", wiID, err)}
+		}
+		return actionResultMsg{msg: fmt.Sprintf("Unassigned WI #%d", wiID)}
+	}
+}
+
+func (m *Model) cycleWorkItemState(wi *azdo.WorkItem) tea.Cmd {
+	client := m.client
+	wiID := wi.ID
+	currentState := wi.StringField("System.State")
+
+	// Cycle: New → Active → Resolved → Closed → New
+	nextState := map[string]string{
+		"New":      "Active",
+		"Active":   "Resolved",
+		"Resolved": "Closed",
+		"Closed":   "New",
+		"To Do":    "Doing",
+		"Doing":    "Done",
+		"Done":     "To Do",
+	}
+
+	next, ok := nextState[currentState]
+	if !ok {
+		next = "Active"
+	}
+
+	return func() tea.Msg {
+		err := client.UpdateWorkItemField("", "", wiID, "System.State", next)
+		if err != nil {
+			return actionResultMsg{err: fmt.Errorf("update WI #%d state: %w", wiID, err)}
+		}
+		return actionResultMsg{msg: fmt.Sprintf("WI #%d: %s → %s", wiID, currentState, next)}
+	}
+}
+
+// --- Pipeline Actions ---
+
+func (m *Model) cancelBuild(build *azdo.Build) tea.Cmd {
+	client := m.client
+	buildID := build.ID
+
+	return func() tea.Msg {
+		err := client.CancelBuild("", "", buildID)
+		if err != nil {
+			return actionResultMsg{err: fmt.Errorf("cancel build #%d: %w", buildID, err)}
+		}
+		return actionResultMsg{msg: fmt.Sprintf("Cancelled build #%d", buildID)}
+	}
+}
+
+func (m *Model) viewBuildLogs(build *azdo.Build) tea.Cmd {
+	client := m.client
+	buildID := build.ID
+
+	return tea.ExecProcess(
+		utils.BuildLogCommand(client, buildID),
+		func(err error) tea.Msg {
+			if err != nil {
+				return actionResultMsg{err: fmt.Errorf("logs: %w", err)}
+			}
+			return actionResultMsg{msg: "Logs closed"}
 		},
 	)
 }

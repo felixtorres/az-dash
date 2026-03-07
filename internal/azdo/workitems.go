@@ -32,6 +32,21 @@ func (c *Client) QueryWorkItems(org, project, wiql string, top int) ([]WorkItem,
 	return c.getWorkItemsByIDs(org, project, result.WorkItems)
 }
 
+// UpdateWorkItemField updates a single field on a work item using JSON Patch.
+func (c *Client) UpdateWorkItemField(org, project string, wiID int, field, value string) error {
+	apiURL := fmt.Sprintf("%s/wit/workitems/%d", c.projectURL(org, project), wiID)
+
+	patch := []map[string]interface{}{
+		{
+			"op":    "replace",
+			"path":  "/fields/" + field,
+			"value": value,
+		},
+	}
+
+	return c.patchJSON(apiURL, patch, nil)
+}
+
 func (c *Client) getWorkItemsByIDs(org, project string, refs []WIQLWorkItemRef) ([]WorkItem, error) {
 	const batchSize = 200
 

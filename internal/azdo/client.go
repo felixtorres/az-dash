@@ -162,6 +162,24 @@ func (c *Client) postRaw(fullURL string, body interface{}, result interface{}) e
 	return c.doWithAuth(req, result)
 }
 
+// patchJSON sends a PATCH with application/json-patch+json content type
+// (required for Azure DevOps work item updates).
+func (c *Client) patchJSON(apiURL string, body interface{}, result interface{}) error {
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshaling request body: %w", err)
+	}
+
+	fullURL := apiURL + "?api-version=" + apiVersion
+	req, err := http.NewRequest("PATCH", fullURL, strings.NewReader(string(jsonBody)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json-patch+json")
+
+	return c.doWithAuth(req, result)
+}
+
 func (c *Client) put(apiURL string, body interface{}, result interface{}) error {
 	return c.mutate("PUT", apiURL, body, result)
 }
