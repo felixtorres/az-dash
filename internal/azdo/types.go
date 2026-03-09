@@ -2,6 +2,7 @@ package azdo
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -34,6 +35,14 @@ type PullRequest struct {
 func (pr *PullRequest) WebURL() string {
 	if pr.Repository.WebURL != "" {
 		return pr.Repository.WebURL + "/pullrequest/" + fmt.Sprintf("%d", pr.PullRequestID)
+	}
+	// Fallback: derive web URL from the API URL.
+	// API URL format: https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repoId}/pullRequests/{prId}
+	if pr.URL != "" && pr.Repository.Name != "" {
+		if idx := strings.Index(pr.URL, "/_apis/"); idx > 0 {
+			base := pr.URL[:idx]
+			return fmt.Sprintf("%s/_git/%s/pullrequest/%d", base, pr.Repository.Name, pr.PullRequestID)
+		}
 	}
 	return ""
 }
@@ -92,10 +101,16 @@ func (wi *WorkItem) StringField(name string) string {
 }
 
 func (wi *WorkItem) WebURL() string {
-	// Work items don't have a direct webUrl in the response; construct from org info.
-	// The `url` field points to the API URL, which we can't easily convert.
-	// Callers should construct the URL using org/project context.
-	return wi.URL
+	// Derive web URL from the API URL.
+	// API URL format: https://dev.azure.com/{org}/{project}/_apis/wit/workItems/{id}
+	// Web URL format: https://dev.azure.com/{org}/{project}/_workitems/edit/{id}
+	if wi.URL != "" {
+		if idx := strings.Index(wi.URL, "/_apis/"); idx > 0 {
+			base := wi.URL[:idx]
+			return fmt.Sprintf("%s/_workitems/edit/%d", base, wi.ID)
+		}
+	}
+	return ""
 }
 
 // PRIteration represents a push event on a pull request.

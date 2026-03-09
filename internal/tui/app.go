@@ -345,7 +345,9 @@ func (m *Model) handlePipelineKey(msg tea.KeyMsg) tea.Cmd {
 func (m *Model) openInBrowser() tea.Cmd {
 	url := m.selectedURL()
 	if url == "" {
-		return nil
+		return func() tea.Msg {
+			return actionResultMsg{err: fmt.Errorf("no URL available for selected item")}
+		}
 	}
 	return func() tea.Msg {
 		err := utils.OpenBrowser(url)
@@ -359,7 +361,9 @@ func (m *Model) openInBrowser() tea.Cmd {
 func (m *Model) copyURL() tea.Cmd {
 	url := m.selectedURL()
 	if url == "" {
-		return nil
+		return func() tea.Msg {
+			return actionResultMsg{err: fmt.Errorf("no URL available for selected item")}
+		}
 	}
 	return func() tea.Msg {
 		if err := utils.CopyToClipboard(url); err != nil {
